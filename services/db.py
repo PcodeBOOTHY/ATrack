@@ -5,13 +5,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from core.extraction import ITEM_TYPES, NewItem
 from core.timeutil import now_utc, to_utc_iso
 
 SCHEMA_VERSION = 1
 
-ITEM_TYPES = (
-    "assignment", "lab", "quiz", "midterm", "final_exam", "project", "presentation", "other",
-)
 ITEM_STATUSES = ("pending", "completed", "forfeited", "excused")
 PRIORITY_OVERRIDES = ("high", "medium", "low")
 RATING_MODES = ("standard", "experimental")
@@ -194,6 +192,52 @@ def add_item(
          confidence, source_quote, to_utc_iso(now_utc())),
     )
     return cur.lastrowid
+
+
+def find_course(conn: sqlite3.Connection, code: str, term: str | None) -> int | None:
+    """Match an existing course by code (ignoring case and spaces) and term."""
+    key = code.replace(" ", "").lower()
+    rows = conn.execute("SELECT id, code, term FROM courses").fetchall()
+    for row in rows:
+        same_term = (row["term"] or "").strip().lower() == (term or "").strip().lower()
+        if row["code"].replace(" ", "").lower() == key and same_term:
+            return row["id"]
+    return None
+
+
+def save_import(
+    conn: sqlite3.Connection,
+    course: dict,
+    items: list[NewItem],
+) -> tuple[int, int, int]:
+    """Save a reviewed course and its items. Returns (course_id, added, skipped).
+
+    Re-importing the same syllabus reuses the course and skips items that already exist
+    (same title and due date), so nothing is duplicated.
+    """
+    code = course["code"].strip()
+    course_id = find_course(conn, code, course.get("term"))
+    if course_id is None:
+        course_id = add_course(
+            conn, code, name=course.get("name"), section=course.get("section"),
+            instructor=course.get("instructor"), term=course.get("term"),
+        )
+    added = skipped = 0
+    for item in items:
+        exists = conn.execute(
+            "SELECT 1 FROM items WHERE course_id = ? AND lower(title) = lower(?) AND due_at IS ?",
+            (course_id, item.title, item.due_at),
+        ).fetchone()
+        if exists:
+            skipped += 1
+            continue
+        add_item(
+            conn, course_id, item.title, item.type, weight_percent=item.weight_percent,
+            due_at=item.due_at, all_day=item.all_day, location=item.location, notes=item.notes,
+            confidence=item.confidence, source_quote=item.source_quote,
+        )
+        added += 1
+    return course_id, added, skipped
 
 
 def count_tbd_items(conn: sqlite3.Connection) -> int:

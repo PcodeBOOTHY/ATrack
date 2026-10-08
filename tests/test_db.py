@@ -148,3 +148,52 @@ def test_open_db_rolls_back_on_error(tmp_path):
             raise RuntimeError
     with db.open_db(path) as c:
         assert db.table_counts(c)["courses"] == 0
+
+
+# --- save_import ------------------------------------------------------------
+
+from core.extraction import NewItem  # noqa: E402
+
+
+def _new(title="A1", due_at=PAST, **kw):
+    base = dict(title=title, type="assignment", weight_percent=5.0, due_at=due_at, all_day=False,
+                location=None, notes=None, confidence=0.9, source_quote="A1 5%")
+    base.update(kw)
+    return NewItem(**base)
+
+
+COURSE = {"code": "ME 214", "name": "Dynamics", "section": "01", "instructor": "Dr. S", "term": "Winter 2026"}
+
+
+def test_save_import_creates_course_and_items(conn):
+    course_id, added, skipped = db.save_import(conn, COURSE, [_new("A1"), _new("Quiz", due_at=None)])
+    assert (added, skipped) == (2, 0)
+    assert db.count_tbd_items(conn) == 1
+    row = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
+    assert row["instructor"] == "Dr. S" and row["color"] == db.COURSE_PALETTE[0]
+
+
+def test_reimport_reuses_course_and_skips_duplicates(conn):
+    first, _, _ = db.save_import(conn, COURSE, [_new("A1"), _new("Quiz", due_at=None)])
+    again = dict(COURSE, code="me214")  # same course, different spacing/case
+    second, added, skipped = db.save_import(conn, again, [_new("a1"), _new("Quiz", due_at=None), _new("A2")])
+    assert first == second
+    assert (added, skipped) == (1, 2)
+    assert db.table_counts(conn)["courses"] == 1
+
+
+def test_same_code_different_term_is_new_course(conn):
+    a, _, _ = db.save_import(conn, COURSE, [_new()])
+    b, _, _ = db.save_import(conn, dict(COURSE, term="Fall 2026"), [_new()])
+    assert a != b
+
+
+def test_save_import_is_atomic(tmp_path):
+    path = tmp_path / "app.db"
+    with db.open_db(path) as c:
+        db.init_db(c)
+    with pytest.raises(sqlite3.IntegrityError):
+        with db.open_db(path) as c:
+            db.save_import(c, COURSE, [_new("ok"), _new("bad", weight_percent=500)])
+    with db.open_db(path) as c:
+        assert db.table_counts(c) == {"courses": 0, "items": 0, "assignment_files": 0, "rating_matches": 0}

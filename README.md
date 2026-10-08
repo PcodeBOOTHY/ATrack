@@ -4,7 +4,7 @@ A local, single-user assignment tracker. Upload course syllabi, let Claude extra
 assessment, review it, and track your work with an Elo rank from Wood to Certified Academic
 Weapon. See [SPEC.md](SPEC.md) for the full design.
 
-**Status:** Phase 1 (project structure, SQLite schema, navigation shell).
+**Status:** Phase 2 done (syllabus import with review). Next: Phase 3 (TBD page, dashboard, priority).
 
 ## Setup
 
@@ -30,7 +30,7 @@ cp .env.example .env             # Windows: copy .env.example .env
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | From Phase 2 | (none) | Claude API key for syllabus import and difficulty rating |
+| `ANTHROPIC_API_KEY` | Yes, for import | (none) | Claude API key for syllabus import and difficulty rating |
 | `ANTHROPIC_MODEL` | No | `claude-sonnet-5-5` | Model used for extraction |
 | `APP_DB_PATH` | No | `data/app.db` | SQLite file (relative paths resolve from the project root) |
 
@@ -42,6 +42,17 @@ streamlit run app.py
 
 Opens at http://localhost:8501. The database is created automatically at `data/app.db`
 on first start. `data/` and `.env` are git-ignored.
+
+## Importing a syllabus
+
+1. Open **Import Syllabus**, upload PDF / DOCX / PNG / JPG / TXT files, or paste text.
+2. Click **Extract assessments**. Claude reads the files and returns every graded item.
+3. Review the table. ⚠️ marks items with confidence below 70%; compare them with the
+   source quote. Edit any cell, untick **Save** to skip a row, or add rows.
+4. Click **Confirm and save**. Items without a due date go to TBD.
+
+Re-importing the same syllabus is safe: the course is reused and existing items are skipped.
+Each import costs a few cents of API usage.
 
 ## Test
 
@@ -56,11 +67,13 @@ app.py              entry point and navigation (st.navigation)
 pages/              dashboard, import, tbd, rank, experimental, settings
 core/               pure logic, no Streamlit imports (enforced by a test)
   timeutil.py       UTC storage, America/Regina display
+  extraction.py     extraction schema (pydantic) and review-table logic
   elo.py, priority.py, tiers.py   (Phases 3-4)
 services/
   config.py         .env loading
   db.py             SQLite schema and queries
-  syllabus_parser.py, difficulty_rater.py   (Phases 2, 5)
+  syllabus_parser.py  Claude extraction (PDF/image blocks, DOCX text, retry once)
+  difficulty_rater.py (Phase 5)
 tests/              pytest suite
 ```
 
@@ -77,3 +90,7 @@ tests/              pytest suite
   with rating history cannot be deleted.
 - Course colors are assigned automatically from a fixed palette.
 - Uploaded assignment files will be stored in `data/uploads/<item_id>/`.
+- Group weights are split evenly across items ("Labs 20%, 10 labs" = 2% each), noted in notes.
+- A TBD item that had a time in the syllabus keeps it in its notes.
+- Extraction uses structured JSON output plus pydantic validation, with server-side refusal
+  fallback enabled for models that support it.
