@@ -148,3 +148,96 @@ def test_open_db_rolls_back_on_error(tmp_path):
             raise RuntimeError
     with db.open_db(path) as c:
         assert db.table_counts(c)["courses"] == 0
+
+
+# --- save_import ------------------------------------------------------------
+
+from core.extraction import NewItem  # noqa: E402
+
+
+def _new(title="A1", due_at=PAST, **kw):
+    base = dict(title=title, type="assignment", weight_percent=5.0, due_at=due_at, all_day=False,
+                location=None, notes=None, confidence=0.9, source_quote="A1 5%")
+    base.update(kw)
+    return NewItem(**base)
+
+
+COURSE = {"code": "ME 214", "name": "Dynamics", "section": "01", "instructor": "Dr. S", "term": "Winter 2026"}
+
+
+def test_save_import_creates_course_and_items(conn):
+    course_id, added, skipped = db.save_import(conn, COURSE, [_new("A1"), _new("Quiz", due_at=None)])
+    assert (added, skipped) == (2, 0)
+    assert db.count_tbd_items(conn) == 1
+    row = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
+    assert row["instructor"] == "Dr. S" and row["color"] == db.COURSE_PALETTE[0]
+
+
+def test_reimport_reuses_course_and_skips_duplicates(conn):
+    first, _, _ = db.save_import(conn, COURSE, [_new("A1"), _new("Quiz", due_at=None)])
+    again = dict(COURSE, code="me214")  # same course, different spacing/case
+    second, added, skipped = db.save_import(conn, again, [_new("a1"), _new("Quiz", due_at=None), _new("A2")])
+    assert first == second
+    assert (added, skipped) == (1, 2)
+    assert db.table_counts(conn)["courses"] == 1
+
+
+def test_same_code_different_term_is_new_course(conn):
+    a, _, _ = db.save_import(conn, COURSE, [_new()])
+    b, _, _ = db.save_import(conn, dict(COURSE, term="Fall 2026"), [_new()])
+    assert a != b
+
+
+def test_save_import_is_atomic(tmp_path):
+    path = tmp_path / "app.db"
+    with db.open_db(path) as c:
+        db.init_db(c)
+    with pytest.raises(sqlite3.IntegrityError):
+        with db.open_db(path) as c:
+            db.save_import(c, COURSE, [_new("ok"), _new("bad", weight_percent=500)])
+    with db.open_db(path) as c:
+        assert db.table_counts(c) == {"courses": 0, "items": 0, "assignment_files": 0, "rating_matches": 0}
+
+
+# --- Phase 3 queries --------------------------------------------------------
+
+def test_list_items_joins_course_and_difficulty(conn, course_id):
+    item = db.add_item(conn, course_id, "A1", "assignment", due_at=PAST)
+    conn.execute("INSERT INTO assignment_files (item_id, file_path, ai_difficulty, user_override_difficulty,"
+                 " uploaded_at) VALUES (?, 'a.pdf', 4, 7, ?)", (item, PAST))
+    db.add_item(conn, course_id, "TBD", "quiz")
+    rows = db.list_items(conn)
+    assert [r["title"] for r in rows] == ["A1", "TBD"]  # dated first
+    assert rows[0]["course_code"] == "ME 214" and rows[0]["difficulty"] == 7
+    assert rows[1]["difficulty"] is None
+
+
+def test_set_due_moves_item_out_of_tbd(conn, course_id):
+    item = db.add_item(conn, course_id, "Project", "project")
+    assert [r["id"] for r in db.list_tbd_items(conn)] == [item]
+    db.set_item_due(conn, item, PAST, all_day=True)
+    assert db.list_tbd_items(conn) == [] and db.count_tbd_items(conn) == 0
+    row = conn.execute("SELECT due_at, all_day FROM items WHERE id=?", (item,)).fetchone()
+    assert (row["due_at"], row["all_day"]) == (PAST, 1)
+
+
+def test_update_item_rejects_unknown_fields(conn, course_id):
+    item = db.add_item(conn, course_id, "A1", "assignment")
+    db.update_item(conn, item, priority_override="high", notes="bring calculator")
+    assert conn.execute("SELECT priority_override FROM items WHERE id=?", (item,)).fetchone()[0] == "high"
+    with pytest.raises(ValueError):
+        db.update_item(conn, item, status="completed")
+
+
+def test_due_edit_does_not_change_match_snapshot(conn, course_id):
+    item = db.add_item(conn, course_id, "A1", "assignment", due_at=PAST)
+    _match(conn, item)
+    db.update_item(conn, item, due_at="2026-03-01T05:59:00Z")
+    snap = conn.execute("SELECT due_at_snapshot FROM rating_matches WHERE item_id=?", (item,)).fetchone()[0]
+    assert snap == PAST
+
+
+def test_delete_item(conn, course_id):
+    item = db.add_item(conn, course_id, "A1", "assignment")
+    db.delete_item(conn, item)
+    assert db.table_counts(conn)["items"] == 0

@@ -13,3 +13,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Google sign-in secrets
+.streamlit/secrets.toml

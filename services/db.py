@@ -1,17 +1,17 @@
 """SQLite access (SPEC section 6). All timestamps are stored as UTC ISO strings."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from core.assessment import ITEM_TYPES
+from core.extraction import NewItem
 from core.timeutil import now_utc, to_utc_iso
 
 SCHEMA_VERSION = 1
 
-ITEM_TYPES = (
-    "assignment", "lab", "quiz", "midterm", "final_exam", "project", "presentation", "other",
-)
 ITEM_STATUSES = ("pending", "completed", "forfeited", "excused")
 PRIORITY_OVERRIDES = ("high", "medium", "low")
 RATING_MODES = ("standard", "experimental")
@@ -120,7 +120,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Create all tables if missing. Safe to call on every app start."""
     with conn:
         conn.executescript(SCHEMA)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        # Only write when needed: an unchanged file must keep the same hash for Drive sync
+        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 @contextmanager
@@ -194,6 +196,147 @@ def add_item(
          confidence, source_quote, to_utc_iso(now_utc())),
     )
     return cur.lastrowid
+
+
+def find_course(conn: sqlite3.Connection, code: str, term: str | None) -> int | None:
+    """Match an existing course by code (ignoring case and spaces) and term."""
+    key = code.replace(" ", "").lower()
+    rows = conn.execute("SELECT id, code, term FROM courses").fetchall()
+    for row in rows:
+        same_term = (row["term"] or "").strip().lower() == (term or "").strip().lower()
+        if row["code"].replace(" ", "").lower() == key and same_term:
+            return row["id"]
+    return None
+
+
+def save_import(
+    conn: sqlite3.Connection,
+    course: dict,
+    items: list[NewItem],
+) -> tuple[int, int, int]:
+    """Save a reviewed course and its items. Returns (course_id, added, skipped).
+
+    Re-importing the same syllabus reuses the course and skips items that already exist
+    (same title and due date), so nothing is duplicated.
+    """
+    code = course["code"].strip()
+    course_id = find_course(conn, code, course.get("term"))
+    if course_id is None:
+        course_id = add_course(
+            conn, code, name=course.get("name"), section=course.get("section"),
+            instructor=course.get("instructor"), term=course.get("term"),
+        )
+    added = skipped = 0
+    for item in items:
+        exists = conn.execute(
+            "SELECT 1 FROM items WHERE course_id = ? AND lower(title) = lower(?) AND due_at IS ?",
+            (course_id, item.title, item.due_at),
+        ).fetchone()
+        if exists:
+            skipped += 1
+            continue
+        add_item(
+            conn, course_id, item.title, item.type, weight_percent=item.weight_percent,
+            due_at=item.due_at, all_day=item.all_day, location=item.location, notes=item.notes,
+            confidence=item.confidence, source_quote=item.source_quote,
+        )
+        added += 1
+    return course_id, added, skipped
+
+
+def list_courses(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM courses ORDER BY code, term")]
+
+
+def list_items(conn: sqlite3.Connection) -> list[dict]:
+    """All items joined with their course, plus the experimental difficulty if one exists."""
+    rows = conn.execute("""
+        SELECT i.*, c.code AS course_code, c.name AS course_name, c.color AS course_color,
+               (SELECT COALESCE(f.user_override_difficulty, f.ai_difficulty)
+                  FROM assignment_files f WHERE f.item_id = i.id
+                 ORDER BY f.id DESC LIMIT 1) AS difficulty
+          FROM items i JOIN courses c ON c.id = i.course_id
+         ORDER BY i.due_at IS NULL, i.due_at, i.id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_tbd_items(conn: sqlite3.Connection) -> list[dict]:
+    """Pending items with no due date, grouped-ready (ordered by course)."""
+    rows = conn.execute("""
+        SELECT i.*, c.code AS course_code, c.name AS course_name, c.color AS course_color
+          FROM items i JOIN courses c ON c.id = i.course_id
+         WHERE i.due_at IS NULL AND i.status = 'pending'
+         ORDER BY c.code, i.id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+EDITABLE_ITEM_FIELDS = (
+    "title", "type", "weight_percent", "due_at", "all_day", "location", "notes", "priority_override",
+)
+
+
+def update_item(conn: sqlite3.Connection, item_id: int, **fields) -> None:
+    """Update editable fields. Rating history is untouched (it keeps due_at_snapshot)."""
+    unknown = set(fields) - set(EDITABLE_ITEM_FIELDS)
+    if unknown:
+        raise ValueError(f"not editable: {sorted(unknown)}")
+    if not fields:
+        return
+    if "all_day" in fields:
+        fields["all_day"] = int(bool(fields["all_day"]))
+    assignments = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", (*fields.values(), item_id))
+
+
+def set_item_due(conn: sqlite3.Connection, item_id: int, due_at: str, all_day: bool) -> None:
+    """Give a TBD item a date; it then leaves TBD and appears on the dashboard."""
+    update_item(conn, item_id, due_at=due_at, all_day=all_day)
+
+
+def delete_item(conn: sqlite3.Connection, item_id: int) -> None:
+    """Fails with IntegrityError if the item has rating history."""
+    conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+
+
+def add_assignment_file(
+    conn: sqlite3.Connection, item_id: int, file_path: str, *, ai_difficulty: int, ai_hours: float,
+    ai_problem_count: int | None, ai_topics: list[str], ai_justification: str,
+) -> int:
+    """Store an AI rating. The newest row per item is the one used."""
+    cur = conn.execute(
+        """INSERT INTO assignment_files (item_id, file_path, ai_difficulty, ai_hours, ai_problem_count,
+                                         ai_topics, ai_justification, uploaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (item_id, file_path, ai_difficulty, ai_hours, ai_problem_count, json.dumps(ai_topics),
+         ai_justification, to_utc_iso(now_utc())),
+    )
+    return cur.lastrowid
+
+
+def set_difficulty_override(conn: sqlite3.Connection, file_id: int, difficulty: int | None) -> None:
+    """Override the AI difficulty (1-10), or None to go back to the AI value."""
+    conn.execute("UPDATE assignment_files SET user_override_difficulty = ? WHERE id = ?", (difficulty, file_id))
+
+
+def latest_files(conn: sqlite3.Connection) -> list[dict]:
+    """The newest rated file for each item, with item and course details."""
+    rows = conn.execute("""
+        SELECT f.*, i.title, i.type, i.status, i.weight_percent, i.due_at, c.code AS course_code,
+               (SELECT COUNT(*) FROM rating_matches m
+                 WHERE m.item_id = i.id AND m.mode = 'experimental') AS has_match
+          FROM assignment_files f
+          JOIN items i ON i.id = f.item_id JOIN courses c ON c.id = i.course_id
+         WHERE f.id = (SELECT MAX(f2.id) FROM assignment_files f2 WHERE f2.item_id = f.item_id)
+         ORDER BY c.code, i.due_at IS NULL, i.due_at
+    """).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["ai_topics"] = json.loads(d["ai_topics"]) if d["ai_topics"] else []
+        out.append(d)
+    return out
 
 
 def count_tbd_items(conn: sqlite3.Connection) -> int:
