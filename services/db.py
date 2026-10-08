@@ -5,7 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from core.extraction import ITEM_TYPES, NewItem
+from core.assessment import ITEM_TYPES
+from core.extraction import NewItem
 from core.timeutil import now_utc, to_utc_iso
 
 SCHEMA_VERSION = 1
@@ -118,7 +119,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Create all tables if missing. Safe to call on every app start."""
     with conn:
         conn.executescript(SCHEMA)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        # Only write when needed: an unchanged file must keep the same hash for Drive sync
+        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 @contextmanager
@@ -238,6 +241,62 @@ def save_import(
         )
         added += 1
     return course_id, added, skipped
+
+
+def list_courses(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM courses ORDER BY code, term")]
+
+
+def list_items(conn: sqlite3.Connection) -> list[dict]:
+    """All items joined with their course, plus the experimental difficulty if one exists."""
+    rows = conn.execute("""
+        SELECT i.*, c.code AS course_code, c.name AS course_name, c.color AS course_color,
+               (SELECT COALESCE(f.user_override_difficulty, f.ai_difficulty)
+                  FROM assignment_files f WHERE f.item_id = i.id
+                 ORDER BY f.id DESC LIMIT 1) AS difficulty
+          FROM items i JOIN courses c ON c.id = i.course_id
+         ORDER BY i.due_at IS NULL, i.due_at, i.id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_tbd_items(conn: sqlite3.Connection) -> list[dict]:
+    """Pending items with no due date, grouped-ready (ordered by course)."""
+    rows = conn.execute("""
+        SELECT i.*, c.code AS course_code, c.name AS course_name, c.color AS course_color
+          FROM items i JOIN courses c ON c.id = i.course_id
+         WHERE i.due_at IS NULL AND i.status = 'pending'
+         ORDER BY c.code, i.id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+EDITABLE_ITEM_FIELDS = (
+    "title", "type", "weight_percent", "due_at", "all_day", "location", "notes", "priority_override",
+)
+
+
+def update_item(conn: sqlite3.Connection, item_id: int, **fields) -> None:
+    """Update editable fields. Rating history is untouched (it keeps due_at_snapshot)."""
+    unknown = set(fields) - set(EDITABLE_ITEM_FIELDS)
+    if unknown:
+        raise ValueError(f"not editable: {sorted(unknown)}")
+    if not fields:
+        return
+    if "all_day" in fields:
+        fields["all_day"] = int(bool(fields["all_day"]))
+    assignments = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", (*fields.values(), item_id))
+
+
+def set_item_due(conn: sqlite3.Connection, item_id: int, due_at: str, all_day: bool) -> None:
+    """Give a TBD item a date; it then leaves TBD and appears on the dashboard."""
+    update_item(conn, item_id, due_at=due_at, all_day=all_day)
+
+
+def delete_item(conn: sqlite3.Connection, item_id: int) -> None:
+    """Fails with IntegrityError if the item has rating history."""
+    conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
 
 
 def count_tbd_items(conn: sqlite3.Connection) -> int:

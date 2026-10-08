@@ -12,11 +12,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from core.assessment import ITEM_TYPES
 from core.timeutil import local_due_to_utc
 
-ITEM_TYPES = (
-    "assignment", "lab", "quiz", "midterm", "final_exam", "project", "presentation", "other",
-)
 AssessmentType = Literal[
     "assignment", "lab", "quiz", "midterm", "final_exam", "project", "presentation", "other",
 ]

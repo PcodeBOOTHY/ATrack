@@ -1,8 +1,9 @@
 import pandas as pd
 import streamlit as st
 
+from core.assessment import ITEM_TYPES
 from core.extraction import (
-    ITEM_TYPES, LOW_CONFIDENCE, ExtractionError, SyllabusExtraction, is_low_confidence,
+    LOW_CONFIDENCE, ExtractionError, SyllabusExtraction, is_low_confidence,
     rows_to_new_items, to_review_rows, total_weight,
 )
 from services import config, db

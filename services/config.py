@@ -29,3 +29,13 @@ def db_path() -> Path:
         return DEFAULT_DB_PATH
     path = Path(custom)
     return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def allowed_email() -> str | None:
+    """The only Google account allowed to sign in."""
+    value = os.getenv("ALLOWED_EMAIL", "").strip()
+    return value or None
+
+
+def sync_state_path() -> Path:
+    return db_path().parent / "sync_state.json"
