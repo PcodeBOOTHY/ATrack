@@ -47,6 +47,7 @@ with st.sidebar:
         st.warning("ANTHROPIC_API_KEY is not set. Add it to .env to enable syllabus import.")
     account.sidebar_status(email, sync)
 
+account.unsaved_banner()             # online only: Drive save failed
 reward.show_pending_reward()         # reward screen right after a completion
 
 try:

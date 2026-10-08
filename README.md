@@ -7,7 +7,32 @@ Weapon. See [SPEC.md](SPEC.md) for the full design.
 
 **Status:** All 5 phases done: import, TBD + dashboard, Elo rank, experimental rank, Google Drive sync.
 
-## Setup
+## Run it on Google Cloud (no installs)
+
+The app can run as a private website on Google Cloud Run, opened from any browser or phone.
+Your data is stored in your Google Drive, so Google sign-in is required.
+
+1. Go to https://console.cloud.google.com. Create a project (top bar → project picker →
+   **New project**) and make sure billing is turned on for it (Billing → link a billing
+   account; personal use stays within the free tier, but Google requires a card on file).
+2. Click the **Cloud Shell** button (the `>_` icon, top right). A terminal opens in the browser.
+3. Paste these lines (GitHub asks for your username and a token because the repo is private):
+   ```
+   git clone https://github.com/PcodeBOOTHY/ATrack.git
+   cd ATrack
+   bash deploy/google-cloud.sh
+   ```
+4. The script tells you exactly what to click to create the Google sign-in client, then asks
+   for the client ID/secret, your Gmail and your Anthropic API key, and deploys
+   (3-5 minutes). It prints your app's address at the end.
+
+To update the app later: open Cloud Shell, `cd ATrack && git pull && bash deploy/google-cloud.sh`.
+
+Notes: the app sleeps when unused and takes ~10 seconds to wake. Google's Drive permission
+lasts about an hour per sign-in; if a red banner says changes aren't saved, click
+**Sign in again**. Uploaded assignment files aren't kept between restarts (their ratings are).
+
+## Setup (run on your own computer)
 
 Requires Python 3.11 or newer.
 
@@ -132,6 +157,9 @@ pytest
 
 ```
 app.py              entry point: sign-in, sync, navigation
+cloud_start.py      Cloud Run entry point (writes secrets.toml from env vars)
+Dockerfile          container for Cloud Run
+deploy/google-cloud.sh  guided Cloud Shell deploy script
 views/              dashboard, import, tbd, rank, experimental, settings (pages; not named
                     "pages/" so Streamlit doesn't auto-discover them and bypass app.py)
 ui/                 Streamlit helpers (sign-in + sync screens, item tables)
@@ -151,6 +179,7 @@ services/
   db.py             SQLite schema and queries
   syllabus_parser.py  Claude extraction (PDF/image blocks, DOCX text, retry once)
   drive_sync.py     Google Drive client and sync
+  cloud.py          Cloud Run detection and sign-in config from env vars
   rating.py         completing, forfeiting, undo, excused, history, reset, export
   claude_client.py  shared Claude plumbing: files -> blocks, JSON schema, retry, errors
   difficulty_rater.py AI difficulty rating (SPEC 4.6)
