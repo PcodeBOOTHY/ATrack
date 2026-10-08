@@ -8,7 +8,6 @@ import streamlit as st
 from core.sync import SyncAction
 from core.timeutil import format_local, now_utc
 from services import config, db
-from services.cloud import is_cloud
 from services.drive_sync import DriveAuthError, DriveClient, DriveError, DriveSync
 
 _STATUS = "sync_status"        # (kind, message) shown in the sidebar
@@ -28,13 +27,6 @@ def require_login() -> str | None:
     Returns the signed-in email, or None in local-only mode.
     """
     if not auth_configured():
-        if is_cloud():
-            # Online, the app must not run without sign-in: the data lives in your Drive
-            # and anyone with the link could otherwise use your API key.
-            st.title("🎓 Academic Weapon")
-            st.error("Google sign-in isn't configured for this deployment. "
-                     "Run the deploy script again and enter the Google client ID and secret.")
-            st.stop()
         return None
 
     if not st.user.get("is_logged_in", False):
@@ -115,45 +107,18 @@ def _conflict_screen(sync: DriveSync) -> None:
     st.stop()
 
 
-def _blocked_screen(exc: Exception) -> None:
-    st.title("🎓 Academic Weapon")
-    if isinstance(exc, DriveAuthError):
-        st.warning("Your Google session expired. Sign in again to load your data.")
-        st.button("Sign in again", type="primary", on_click=st.logout)
-    else:
-        st.error(f"Couldn't load your data from Google Drive: {exc}")
-        if st.button("Try again", type="primary"):
-            st.rerun()
-    st.stop()
-
-
-def unsaved_banner() -> None:
-    """Online, unsaved changes disappear when the server sleeps: say so loudly."""
-    kind, message = st.session_state.get(_STATUS, ("ok", ""))
-    if is_cloud() and kind in ("auth", "error"):
-        text, button = st.columns([4, 1], vertical_alignment="center")
-        text.error("⚠️ Your latest changes aren't saved to Google Drive yet. " + message)
-        if kind == "auth":
-            button.button("Sign in again", type="primary", on_click=st.logout, key="banner_login")
-
-
 def start_sync(email: str | None) -> DriveSync | None:
     """Run once per browser session, before any page reads the database."""
     if email is None:
         return None
     sync = _drive_sync(email)
     if sync is None:
-        if is_cloud():
-            _blocked_screen(DriveAuthError("Google didn't share Drive access. Sign in again."))
         return None
     if not st.session_state.get(_CHECKED):
         try:
-            with st.spinner("Loading your data from Google Drive…"):
+            with st.spinner("Syncing with Google Drive…"):
                 result = sync.sync()
         except DriveError as exc:
-            if is_cloud():
-                # Online, this server's copy is temporary: never start without your Drive data
-                _blocked_screen(exc)
             _record_error(exc)
             st.session_state[_CHECKED] = True
             return sync
