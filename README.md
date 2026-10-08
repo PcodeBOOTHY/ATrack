@@ -7,7 +7,21 @@ Weapon. See [SPEC.md](SPEC.md) for the full design.
 
 **Status:** All 5 phases done: import, TBD + dashboard, Elo rank, experimental rank, Google Drive sync.
 
-## Setup
+## Quick start (Windows): double-click `start.bat`
+
+1. Get the code: on GitHub click **Code → Download ZIP** and unzip it (or `git pull` if you
+   already have it).
+2. Open the folder and double-click **`start.bat`**. The first time it:
+   - installs Python if your computer doesn't have it,
+   - sets up the app's packages (a few minutes),
+   - asks for your Anthropic API key (get one at https://console.anthropic.com).
+3. Your browser opens the app at http://localhost:8501. Keep the black window open while you
+   use it; close it to stop the app.
+
+After the first time, double-clicking `start.bat` starts the app in a few seconds.
+On macOS or Linux, run `bash start.sh` instead.
+
+## Manual setup
 
 Requires Python 3.11 or newer.
 
@@ -131,6 +145,7 @@ pytest
 ## Layout
 
 ```
+start.bat / start.sh  one-click launchers (install, set up, run)
 app.py              entry point: sign-in, sync, navigation
 views/              dashboard, import, tbd, rank, experimental, settings (pages; not named
                     "pages/" so Streamlit doesn't auto-discover them and bypass app.py)
