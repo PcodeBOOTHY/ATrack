@@ -17,7 +17,7 @@ with db.open_db(config.db_path()) as conn:
         rank.full_panel(conn, "standard")
     with experimental_tab:
         st.caption("Experimental: AI-estimated difficulty. Separate from your standard rank. "
-                   "Items join it once their assignment file is rated (Phase 5).")
+                   "Items join it once their assignment file is rated on the Experimental Rank page.")
         rank.full_panel(conn, "experimental")
 
 st.caption("Win = done on time (bonus up to ×1.5 for finishing up to 7 days early) · "

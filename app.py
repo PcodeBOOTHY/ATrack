@@ -29,12 +29,12 @@ if forfeits:
         st.toast(f"Your rank is now {demoted}. A few on-time items will bring it back.", icon="💪")
 
 pages = [
-    st.Page("pages/dashboard.py", title="Dashboard", icon="📋", default=True),
-    st.Page("pages/import.py", title="Import Syllabus", icon="📥"),
-    st.Page("pages/tbd.py", title=f"TBD ({tbd})" if tbd else "TBD", icon="❓"),
-    st.Page("pages/rank.py", title="Rank", icon="🏆"),
-    st.Page("pages/experimental.py", title="Experimental Rank", icon="🧪"),
-    st.Page("pages/settings.py", title="Settings", icon="⚙️"),
+    st.Page("views/dashboard.py", title="Dashboard", icon="📋", default=True),
+    st.Page("views/import.py", title="Import Syllabus", icon="📥"),
+    st.Page("views/tbd.py", title=f"TBD ({tbd})" if tbd else "TBD", icon="❓"),
+    st.Page("views/rank.py", title="Rank", icon="🏆"),
+    st.Page("views/experimental.py", title="Experimental Rank", icon="🧪"),
+    st.Page("views/settings.py", title="Settings", icon="⚙️"),
 ]
 nav = st.navigation(pages)
 

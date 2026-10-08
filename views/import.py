@@ -32,7 +32,7 @@ def _reset_review() -> None:
 if RESULT_KEY not in st.session_state:
     if saved := st.session_state.pop("import_saved", None):
         st.success("Saved. " + " · ".join(saved))
-        st.page_link("pages/tbd.py", label="Items without dates are waiting in TBD", icon="❓")
+        st.page_link("views/tbd.py", label="Items without dates are waiting in TBD", icon="❓")
     st.write("Upload one or more syllabi, or paste the text. Claude extracts every graded item, "
              "then you review it before anything is saved.")
     uploads = st.file_uploader(

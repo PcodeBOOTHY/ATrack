@@ -5,7 +5,7 @@ that saves your data to your own Google Drive. Upload course syllabi, let Claude
 assessment, review it, and track your work with an Elo rank from Wood to Certified Academic
 Weapon. See [SPEC.md](SPEC.md) for the full design.
 
-**Status:** Phase 4 done (Elo rank, completion + reward screen, rank page). Next: Phase 5 (experimental rank).
+**Status:** All 5 phases done: import, TBD + dashboard, Elo rank, experimental rank, Google Drive sync.
 
 ## Setup
 
@@ -110,6 +110,18 @@ Each import costs a few cents of API usage.
 - **Rank** shows both ratings, the tier ladder, a rating chart and full match history.
 - **Settings** has JSON export and rating reset.
 
+## Experimental rank
+
+- On **Experimental Rank → Rate an assignment**, pick a pending item and upload the actual
+  assignment / lab / exam outline (PDF, Word, screenshot or text). Claude returns a difficulty
+  (1-10), estimated hours, problem count, topics and a short justification.
+- When that item is completed, it also plays a match in the experimental rating against
+  `700 + 80 x difficulty + 10 x weight`. Items without a rated file are left out of it.
+- **Rated items** lets you override the AI difficulty (shown as ✋ in match history). Once an
+  item is finished its experimental result is final.
+- The difficulty also feeds the dashboard priority score (`D = (d - 1) / 9`).
+- Uploaded files are kept in `data/uploads/` on this computer; only the ratings sync to Drive.
+
 ## Test
 
 ```bash
@@ -120,7 +132,8 @@ pytest
 
 ```
 app.py              entry point: sign-in, sync, navigation
-pages/              dashboard, import, tbd, rank, experimental, settings
+views/              dashboard, import, tbd, rank, experimental, settings (pages; not named
+                    "pages/" so Streamlit doesn't auto-discover them and bypass app.py)
 ui/                 Streamlit helpers (sign-in + sync screens, item tables)
 core/               pure logic, no Streamlit imports (enforced by a test)
   timeutil.py       UTC storage, America/Regina display
@@ -132,13 +145,15 @@ core/               pure logic, no Streamlit imports (enforced by a test)
   elo.py            Elo math: opponents, expected/actual score, K, earliness, replay
   tiers.py          Wood ... Certified Academic Weapon, progress to next tier
   rewards.py        streaks and encouraging messages
+  difficulty.py     difficulty rating schema (pydantic)
 services/
   config.py         .env loading
   db.py             SQLite schema and queries
   syllabus_parser.py  Claude extraction (PDF/image blocks, DOCX text, retry once)
   drive_sync.py     Google Drive client and sync
   rating.py         completing, forfeiting, undo, excused, history, reset, export
-  difficulty_rater.py (Phase 5)
+  claude_client.py  shared Claude plumbing: files -> blocks, JSON schema, retry, errors
+  difficulty_rater.py AI difficulty rating (SPEC 4.6)
 tests/              pytest suite
 ```
 
@@ -169,3 +184,7 @@ tests/              pytest suite
 - Forfeits count toward the 10 placement matches; the on-time streak resets on any
   half/loss/forfeit and ignores excused items.
 - You can back-date a completion (never into the future); scoring uses that time.
+- A file uploaded after an item is completed doesn't create a retroactive experimental match,
+  and changing an override never rewrites a recorded match.
+- Page files live in `views/`, not `pages/`: Streamlit treats a `pages/` folder specially,
+  which can show raw file names in the sidebar.

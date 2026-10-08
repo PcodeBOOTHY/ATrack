@@ -20,7 +20,7 @@ items = build_items(rows, now)
 
 if not items:
     st.info("No items yet. Import a syllabus to get started.")
-    st.page_link("pages/import.py", label="Import a syllabus", icon="📥")
+    st.page_link("views/import.py", label="Import a syllabus", icon="📥")
     st.stop()
 
 if saved := st.session_state.pop("dashboard_saved", None):

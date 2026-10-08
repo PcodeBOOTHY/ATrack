@@ -1,5 +1,6 @@
 """SQLite access (SPEC section 6). All timestamps are stored as UTC ISO strings."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -297,6 +298,45 @@ def set_item_due(conn: sqlite3.Connection, item_id: int, due_at: str, all_day: b
 def delete_item(conn: sqlite3.Connection, item_id: int) -> None:
     """Fails with IntegrityError if the item has rating history."""
     conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+
+
+def add_assignment_file(
+    conn: sqlite3.Connection, item_id: int, file_path: str, *, ai_difficulty: int, ai_hours: float,
+    ai_problem_count: int | None, ai_topics: list[str], ai_justification: str,
+) -> int:
+    """Store an AI rating. The newest row per item is the one used."""
+    cur = conn.execute(
+        """INSERT INTO assignment_files (item_id, file_path, ai_difficulty, ai_hours, ai_problem_count,
+                                         ai_topics, ai_justification, uploaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (item_id, file_path, ai_difficulty, ai_hours, ai_problem_count, json.dumps(ai_topics),
+         ai_justification, to_utc_iso(now_utc())),
+    )
+    return cur.lastrowid
+
+
+def set_difficulty_override(conn: sqlite3.Connection, file_id: int, difficulty: int | None) -> None:
+    """Override the AI difficulty (1-10), or None to go back to the AI value."""
+    conn.execute("UPDATE assignment_files SET user_override_difficulty = ? WHERE id = ?", (difficulty, file_id))
+
+
+def latest_files(conn: sqlite3.Connection) -> list[dict]:
+    """The newest rated file for each item, with item and course details."""
+    rows = conn.execute("""
+        SELECT f.*, i.title, i.type, i.status, i.weight_percent, i.due_at, c.code AS course_code,
+               (SELECT COUNT(*) FROM rating_matches m
+                 WHERE m.item_id = i.id AND m.mode = 'experimental') AS has_match
+          FROM assignment_files f
+          JOIN items i ON i.id = f.item_id JOIN courses c ON c.id = i.course_id
+         WHERE f.id = (SELECT MAX(f2.id) FROM assignment_files f2 WHERE f2.item_id = f.item_id)
+         ORDER BY c.code, i.due_at IS NULL, i.due_at
+    """).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["ai_topics"] = json.loads(d["ai_topics"]) if d["ai_topics"] else []
+        out.append(d)
+    return out
 
 
 def count_tbd_items(conn: sqlite3.Connection) -> int:
