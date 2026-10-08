@@ -1,6 +1,7 @@
 import streamlit as st
 
-from services import config, db
+from core.timeutil import now_utc
+from services import config, db, rating
 from ui import account
 
 st.title("⚙️ Settings")
@@ -25,4 +26,24 @@ with db.open_db(config.db_path()) as conn:
     st.subheader("Database contents")
     st.table(db.table_counts(conn))
 
-st.info("Coming later: export data to JSON and reset ratings.")
+st.subheader("Export")
+with db.open_db(config.db_path()) as conn:
+    export = rating.export_all(conn)
+st.download_button("Download all data (JSON)", export, width="content",
+                   file_name=f"academic-weapon-{now_utc().strftime('%Y-%m-%d')}.json", mime="application/json")
+
+st.subheader("Reset ratings")
+st.caption("Deletes match history so the rating starts again at 1000. Your items stay as they are; "
+           "items already completed won't be re-rated.")
+with st.form("reset"):
+    which = st.radio("Which rating?", ["Standard", "Experimental", "Both"], horizontal=True)
+    confirm = st.text_input("Type RESET to confirm")
+    if st.form_submit_button("Reset ratings", type="primary"):
+        if confirm.strip() != "RESET":
+            st.error("Type RESET (in capitals) to confirm.")
+        else:
+            modes = {"Standard": ("standard",), "Experimental": ("experimental",),
+                     "Both": ("standard", "experimental")}[which]
+            with db.open_db(config.db_path()) as conn:
+                removed = rating.reset_ratings(conn, modes)
+            st.success(f"Reset done. {removed} match(es) removed.")

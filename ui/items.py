@@ -21,10 +21,13 @@ def _due_text(item: DashboardItem) -> str:
     return local.strftime("%a %b %d") if item.all_day else local.strftime("%a %b %d, %I:%M %p")
 
 
-def item_table(items: list[DashboardItem], now: datetime, *, completed: bool = False, key: str) -> None:
+def item_table(
+    items: list[DashboardItem], now: datetime, *, completed: bool = False, key: str
+) -> DashboardItem | None:
+    """Show items; returns the row the user selected (click the left edge of a row)."""
     if not items:
         st.caption("Nothing here.")
-        return
+        return None
     rows = []
     for i in items:
         badge = LABEL_BADGES.get(i.label, "")
@@ -58,14 +61,18 @@ def item_table(items: list[DashboardItem], now: datetime, *, completed: bool = F
             lambda col: ["color: #d62728; font-weight: 600" if str(v).startswith("overdue") else ""
                          for v in col], subset=["When"],
         )
-    st.dataframe(
+    event = st.dataframe(
         styled,
         hide_index=True,
         width="stretch",
         key=key,
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
             "Weight %": st.column_config.NumberColumn(format="%.1f"),
             "Score": st.column_config.ProgressColumn(min_value=0, max_value=1, format="%.2f",
                                                      help="Priority score P from weight, urgency and difficulty"),
         },
     )
+    selected = event.selection.rows
+    return items[selected[0]] if selected else None

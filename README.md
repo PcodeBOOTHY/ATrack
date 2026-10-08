@@ -5,7 +5,7 @@ that saves your data to your own Google Drive. Upload course syllabi, let Claude
 assessment, review it, and track your work with an Elo rank from Wood to Certified Academic
 Weapon. See [SPEC.md](SPEC.md) for the full design.
 
-**Status:** Phase 3 done (TBD page, dashboard, priority, Google sign-in + Drive sync). Next: Phase 4 (Elo rank).
+**Status:** Phase 4 done (Elo rank, completion + reward screen, rank page). Next: Phase 5 (experimental rank).
 
 ## Setup
 
@@ -98,6 +98,18 @@ Each import costs a few cents of API usage.
 - Priority score `P = 0.5·W + 0.35·U + 0.15·D` (see SPEC 4.3): High ≥ 0.60, Medium ≥ 0.35.
   Use **Edit an item** to change dates or weights, or to set a manual High/Medium/Low (✋).
 
+## Completing work and your rank
+
+- On the dashboard, select a row (click its left edge) and press **Mark complete**. Choose
+  "Just now" or the time you actually finished. A reward screen shows your rating change,
+  tier progress and on-time streak. **Undo** is available for 10 minutes (most recent only).
+- **Excused** (extension/deferral) removes an item from rating entirely.
+- Scoring (SPEC 5): on time = win (bonus up to ×1.5 for finishing up to 7 days early),
+  up to 24 h late = half, later = loss. Items still pending 48 h after the deadline are
+  forfeited automatically when the app starts.
+- **Rank** shows both ratings, the tier ladder, a rating chart and full match history.
+- **Settings** has JSON export and rating reset.
+
 ## Test
 
 ```bash
@@ -117,12 +129,15 @@ core/               pure logic, no Streamlit imports (enforced by a test)
   priority.py       priority score and labels
   dashboard.py      filtering, sorting, grouping, This Week
   sync.py           upload / download / conflict decision for Drive sync
-  elo.py, tiers.py  (Phase 4)
+  elo.py            Elo math: opponents, expected/actual score, K, earliness, replay
+  tiers.py          Wood ... Certified Academic Weapon, progress to next tier
+  rewards.py        streaks and encouraging messages
 services/
   config.py         .env loading
   db.py             SQLite schema and queries
   syllabus_parser.py  Claude extraction (PDF/image blocks, DOCX text, retry once)
   drive_sync.py     Google Drive client and sync
+  rating.py         completing, forfeiting, undo, excused, history, reset, export
   difficulty_rater.py (Phase 5)
 tests/              pytest suite
 ```
@@ -149,3 +164,8 @@ tests/              pytest suite
 - "This Week" means overdue plus the next 7 days (rolling), not the calendar week.
 - Accounts: Google sign-in for one allowed address; data lives in that account's Google Drive
   app-data folder (replaces SPEC's "no accounts" for this user's setup).
+- Elo `round()` rounds halves away from zero (+20.5 -> +21), not Python's banker's rounding.
+- Undo only applies to the most recent completion, so later matches never need recomputing.
+- Forfeits count toward the 10 placement matches; the on-time streak resets on any
+  half/loss/forfeit and ignores excused items.
+- You can back-date a completion (never into the future); scoring uses that time.

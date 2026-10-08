@@ -4,9 +4,11 @@ from core.assessment import ITEM_TYPES, TYPE_LABELS
 from core.dashboard import (
     build_items, completed, dated, filter_items, group_by, sort_by_priority, this_week,
 )
-from core.timeutil import LOCAL_TZ, local_due_to_utc, now_utc
-from services import config, db
+from core.timeutil import LOCAL_TZ, local_due_to_utc, now_utc, to_utc_iso
+from services import config, db, rating
+from services.rating import RatingError
 from ui.items import STATUS_LABELS, item_table
+from ui.reward import complete_dialog
 
 st.title("📋 Dashboard")
 
@@ -23,6 +25,53 @@ if not items:
 
 if saved := st.session_state.pop("dashboard_saved", None):
     st.success(saved)
+
+with db.open_db(config.db_path()) as conn:
+    recent = rating.undoable_completion(conn, now)
+if recent is not None:
+    note, button = st.columns([4, 1], vertical_alignment="center")
+    note.info(f"Completed **{recent['title']}** ({recent['delta']:+d}). You can undo this for 10 minutes.")
+    if button.button("Undo", width="stretch"):
+        try:
+            with db.open_db(config.db_path()) as conn:
+                rating.undo_completion(conn, recent["item_id"], now_utc())
+        except RatingError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["dashboard_saved"] = f"Undid **{recent['title']}**. Rating restored."
+            st.rerun()
+
+
+def _set_excused(item_id: int, excused: bool, title: str) -> None:
+    try:
+        with db.open_db(config.db_path()) as conn:
+            rating.set_excused(conn, item_id, excused)
+    except RatingError as exc:
+        st.error(str(exc))
+        return
+    st.session_state["dashboard_saved"] = (
+        f"**{title}** excused. It won't count toward your rank." if excused else f"**{title}** is pending again.")
+    st.rerun()
+
+
+def actions(selected, key: str) -> None:
+    """Buttons for the row selected in a table."""
+    if selected is None:
+        return
+    with st.container(border=True):
+        info, b1, b2 = st.columns([3, 1, 1], vertical_alignment="center")
+        info.markdown(f"**{selected.title}** · {selected.course_code}")
+        if selected.status == "pending":
+            if b1.button("✅ Mark complete", key=f"{key}_done", type="primary", width="stretch"):
+                complete_dialog(selected.id, selected.title, to_utc_iso(selected.due_at))
+            if b2.button("🟦 Excused", key=f"{key}_excuse", width="stretch",
+                         help="Extension or deferral: no rating change"):
+                _set_excused(selected.id, True, selected.title)
+        elif selected.status == "excused":
+            if b1.button("↩️ Not excused", key=f"{key}_unexcuse", width="stretch"):
+                _set_excused(selected.id, False, selected.title)
+        else:
+            info.caption(STATUS_LABELS[selected.status])
 
 # --- filters ----------------------------------------------------------------
 
@@ -52,15 +101,16 @@ by_priority, by_type, by_course, week, done = st.tabs(
 )
 ordered = sort_by_priority(visible)
 
+st.caption("Select a row (click its left edge) to complete it or mark it excused.")
 with by_priority:
-    item_table(ordered, now, key="t_priority")
+    actions(item_table(ordered, now, key="t_priority"), "t_priority")
 
 with by_type:
     groups = group_by(ordered, lambda i: i.type)
     for t in ITEM_TYPES:
         if t in groups:
             st.subheader(f"{TYPE_LABELS[t]} ({len(groups[t])})")
-            item_table(groups[t], now, key=f"t_type_{t}")
+            actions(item_table(groups[t], now, key=f"t_type_{t}"), f"t_type_{t}")
     if not groups:
         st.caption("Nothing here.")
 
@@ -69,16 +119,15 @@ with by_course:
     for (code, color), group in sorted(groups.items()):
         st.markdown(f"<h3 style='border-left: 6px solid {color}; padding-left: 10px'>{code} "
                     f"({len(group)})</h3>", unsafe_allow_html=True)
-        item_table(group, now, key=f"t_course_{code}")
+        actions(item_table(group, now, key=f"t_course_{code}"), f"t_course_{code}")
     if not groups:
         st.caption("Nothing here.")
 
 with week:
     st.caption("Overdue items and everything due in the next 7 days, soonest first.")
-    item_table(this_week(scoped, now), now, key="t_week")
+    actions(item_table(this_week(scoped, now), now, key="t_week"), "t_week")
 
 with done:
-    st.caption("Completing items arrives with the rank system in Phase 4.")
     item_table(completed(scoped), now, completed=True, key="t_done")
 
 st.caption("Priority: 🔴 High (score ≥ 0.60) · 🟠 Medium (0.35–0.59) · 🟢 Low (< 0.35) · "
